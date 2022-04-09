@@ -38,9 +38,45 @@
 #![allow(clippy::mutex_atomic)]
 
 use rand;
-use rgsl::randist::chi_squared::chisq_P;
+use rgsl::{
+  sort::vectors::sort_index,
+  types::wavelet_transforms::{Wavelet, WaveletType, WaveletWorkspace},
+  wavelet_transforms::one_dimension::{transform_forward, transform_inverse},
+  Value,
+};
+
+const N: usize = 256;
+const NC: usize = 20;
 
 fn main() {
-  let factor: f64 = rand::random();
-  println!("Hello, world: {}", chisq_P(2.0, 3.0) * factor);
+  let mut orig_data: [f64; N] = [0.0; N];
+  for i in 0..N {
+    orig_data[i] = rand::random();
+  }
+  let mut data: [f64; N] = orig_data;
+  let mut abscoeff: [f64; N] = [0.0; N];
+  let mut p: [usize; N] = [0; N];
+
+  let wavelet = Wavelet::new(WaveletType::daubechies(), 4).expect("no we have enough memory");
+  let mut workspace = WaveletWorkspace::new(N).expect("no we have enough memory");
+
+  let result = transform_forward(&wavelet, &mut data, 1, N, &mut workspace);
+  assert_eq!(result, Value::Success);
+
+  for i in 0..N {
+    abscoeff[i] = data[i].abs();
+  }
+
+  sort_index(&mut p, &mut abscoeff, 1, N);
+
+  for i in 0..(N - NC) {
+    data[p[i]] = 0.0;
+  }
+
+  let result = transform_inverse(&wavelet, &mut data, 1, N, &mut workspace);
+  assert_eq!(result, Value::Success);
+
+  for i in 0..N {
+    println!("{} {}", orig_data[i], data[i]);
+  }
 }
