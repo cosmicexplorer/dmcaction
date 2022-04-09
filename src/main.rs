@@ -37,15 +37,10 @@
 /* Arc<Mutex> can be more clear than needing to grok Orderings: */
 #![allow(clippy::mutex_atomic)]
 
-extern "C" {
-  pub fn gsl_cdf_chisq_P(x: f64, nu: f64) -> f64;
-}
-
 use rand;
+use rgsl::randist::chi_squared::chisq_P;
 
 fn main() {
   let factor: f64 = rand::random();
-  println!("Hello, world: {}", unsafe {
-    gsl_cdf_chisq_P(2.0, factor) * factor
-  });
+  println!("Hello, world: {}", chisq_P(2.0, 3.0) * factor);
 }

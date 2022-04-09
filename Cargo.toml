@@ -10,6 +10,6 @@ authors = ["Danny McClanahan <dmcC2@hypnicjerk.ai>"]
 [dependencies]
 rand = "0.8"
 
-# [dependencies.GSL]
-# version = "6"
-# features = ["v2_7"]
+[dependencies.GSL]
+version = "6"
+features = ["v2_7"]
