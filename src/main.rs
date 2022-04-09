@@ -47,11 +47,12 @@ use rgsl::{
 
 const N: usize = 256;
 const NC: usize = 20;
+const RANGE: f64 = 10.0;
 
 fn main() {
   let mut orig_data: [f64; N] = [0.0; N];
   for i in 0..N {
-    orig_data[i] = rand::random();
+    orig_data[i] = rand::random::<f64>() * RANGE;
   }
   let mut data: [f64; N] = orig_data;
   let mut abscoeff: [f64; N] = [0.0; N];
