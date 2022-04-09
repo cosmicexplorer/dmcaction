@@ -1,0 +1,15 @@
+[package]
+name = "dmcaction"
+version = "0.1.0"
+edition = "2021"
+license = "AGPL-3.0-only"
+authors = ["Danny McClanahan <dmcC2@hypnicjerk.ai>"]
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dependencies]
+rand = "0.8"
+
+# [dependencies.GSL]
+# version = "6"
+# features = ["v2_7"]
