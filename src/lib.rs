@@ -42,14 +42,11 @@ use cpal::{
   traits::{DeviceTrait, HostTrait, StreamTrait},
   Stream,
 };
-use displaydoc::Display;
-use ringbuf;
 use symphonia::{
   self,
   core::{
-    audio::{AudioBufferRef, RawSample, SampleBuffer, SignalSpec},
+    audio::SampleBuffer,
     codecs::{DecoderOptions, FinalizeResult},
-    conv::ConvertibleSample,
     errors::Error as SymphoniaError,
     formats::FormatOptions,
     io::{MediaSourceStream, MediaSourceStreamOptions},
@@ -58,13 +55,11 @@ use symphonia::{
     units::Duration,
   },
 };
-use thiserror::Error;
 use wasm_bindgen::prelude::*;
 use web_sys::console;
 
-use std::fmt::Debug;
 use std::io::{Cursor, ErrorKind};
-use std::marker::Send;
+use std::mem;
 
 // When the `wee_alloc` feature is enabled, this uses `wee_alloc` as the global
 // allocator.
@@ -119,199 +114,8 @@ fn is_normal_eof(e: &SymphoniaError) -> bool {
   }
 }
 
-#[derive(Debug, Error, Display)]
-pub enum SoundManipulationError {
-  /// error opening stream
-  OpenStreamError,
-  /// error playing stream
-  PlayStreamError,
-  /// error closing stream
-  StreamClosedError,
-  /* /// io error: {0} */
-  /* IoError(#[from] io::Error), */
-}
-
-/// Taken from symphonia's examples: https://github.com/pdeljanov/Symphonia/blob/8f4aaed599ba8c23aab55d1bdad65ed621a68b92/symphonia-play/src/output.rs#L15-L18.
-pub trait AudioOutput {
-  fn write(&mut self, audio_buf_ref: AudioBufferRef<'_>) -> Result<(), SoundManipulationError>;
-  fn flush(&mut self);
-  fn stream(&self) -> &cpal::Stream;
-}
-
-/// This is taken from later in that file: https://github.com/pdeljanov/Symphonia/blob/8f4aaed599ba8c23aab55d1bdad65ed621a68b92/symphonia-play/src/output.rs#L182-L187.
-pub struct CpalAudioOutput;
-
-trait AudioOutputSample:
-  cpal::Sample + ConvertibleSample + RawSample + Send + Copy + Debug + 'static
-{
-}
-
-impl AudioOutputSample for f32 {}
-impl AudioOutputSample for i16 {}
-impl AudioOutputSample for u16 {}
-
-impl CpalAudioOutput {
-  pub fn try_open(
-    spec: SignalSpec,
-    duration: Duration,
-  ) -> Result<CpalAudioOutputImpl, SoundManipulationError> {
-    // Get default host.
-    let host = cpal::default_host();
-
-    // Get the default audio output device.
-    let device = match host.default_output_device() {
-      Some(device) => device,
-      _ => {
-        console::error_1(&format!("failed to get default audio output device").into());
-        return Err(SoundManipulationError::OpenStreamError);
-      }
-    };
-
-    let config = match device.default_output_config() {
-      Ok(config) => config,
-      Err(err) => {
-        console::error_1(
-          &format!("failed to get default audio output device config: {}", err).into(),
-        );
-        return Err(SoundManipulationError::OpenStreamError);
-      }
-    };
-
-    // Select proper playback routine based on sample format.
-    match config.sample_format() {
-      cpal::SampleFormat::F32 => CpalAudioOutputImpl::try_open(spec, duration, &device),
-      x => unreachable!(
-        "can't process anything except f32 for now: got format {:?}",
-        x
-      ),
-      /* cpal::SampleFormat::I16 => CpalAudioOutputImpl::<i16>::try_open(spec, duration, &device), */
-      /* cpal::SampleFormat::U16 => CpalAudioOutputImpl::<u16>::try_open(spec, duration, &device), */
-    }
-  }
-}
-
 #[wasm_bindgen]
-pub struct CpalAudioOutputImpl {
-  ring_buf_producer: ringbuf::Producer<f32>,
-  sample_buf: SampleBuffer<f32>,
-  stream: cpal::Stream,
-}
-
-impl CpalAudioOutputImpl {
-  pub fn stream(&self) -> &cpal::Stream {
-    &self.stream
-  }
-}
-
-#[wasm_bindgen]
-pub struct CpalStreamHandle(CpalAudioOutputImpl);
-
-impl CpalStreamHandle {
-  pub fn inner(&self) -> &CpalAudioOutputImpl {
-    &self.0
-  }
-}
-
-impl CpalAudioOutputImpl {
-  pub fn try_open(
-    spec: SignalSpec,
-    duration: Duration,
-    device: &cpal::Device,
-  ) -> Result<Self, SoundManipulationError> {
-    let num_channels = spec.channels.count();
-
-    // Output audio stream config.
-    let config = cpal::StreamConfig {
-      channels: num_channels as cpal::ChannelCount,
-      sample_rate: cpal::SampleRate(spec.rate),
-      buffer_size: cpal::BufferSize::Default,
-    };
-
-    // Create a ring buffer with a capacity for up-to 200ms of audio.
-    let ring_len: usize = ((200 * spec.rate as usize) / 1000) * num_channels;
-    let ring_len: usize = ring_len * 1000;
-
-    let ring_buf = ringbuf::RingBuffer::new(ring_len);
-    let (ring_buf_producer, mut ring_buf_consumer) = ring_buf.split();
-
-    let stream_result = device.build_output_stream(
-      &config,
-      move |data: &mut [f32], _: &cpal::OutputCallbackInfo| {
-        // Write out as many samples as possible from the ring buffer to the audio
-        // output.
-        let written = ring_buf_consumer.pop_slice(data);
-        assert_eq!(written, data.len());
-        /* // Mute any remaining samples. */
-        /* data[written..].iter_mut().for_each(|s| *s = T::MID); */
-      },
-      move |err| console::error_1(&format!("audio output error: {}", err).into()),
-    );
-
-    match stream_result {
-      Err(err) => {
-        console::error_1(&format!("audio output stream open error: {}", err).into());
-        return Err(SoundManipulationError::OpenStreamError);
-      }
-      Ok(stream) => {
-        // Start the output stream.
-        if let Err(err) = stream.play() {
-          console::error_1(&format!("audio output stream play error: {}", err).into());
-
-          return Err(SoundManipulationError::PlayStreamError);
-        }
-
-        let sample_buf = SampleBuffer::<f32>::new(duration, spec);
-
-        Ok(CpalAudioOutputImpl {
-          ring_buf_producer,
-          sample_buf,
-          stream,
-        })
-      }
-    }
-  }
-}
-
-impl AudioOutput for CpalAudioOutputImpl {
-  fn write(&mut self, decoded: AudioBufferRef<'_>) -> Result<(), SoundManipulationError> {
-    // Do nothing if there are no audio frames.
-    if decoded.frames() == 0 {
-      return Ok(());
-    }
-
-    // Audio samples must be interleaved for cpal. Interleave the samples in the audio
-    // buffer into the sample buffer.
-    self.sample_buf.copy_interleaved_ref(decoded);
-
-    // Write all the interleaved samples to the ring buffer.
-    let samples: &[f32] = self.sample_buf.samples();
-
-    let written: usize = self.ring_buf_producer.push_slice(samples);
-    assert_eq!(written, samples.len());
-
-    Ok(())
-  }
-
-  fn flush(&mut self) {
-    // Flush is best-effort, ignore the returned result.
-    let _ = self.stream.pause();
-  }
-
-  fn stream(&self) -> &cpal::Stream {
-    &self.stream
-  }
-}
-
-#[wasm_bindgen]
-pub fn play_recorded(handle: &CpalStreamHandle) {
-  let inner = handle.inner();
-  let stream = inner.stream();
-  console::log_1(&format!("playing now!!").into());
-  stream.play().unwrap();
-}
-
-#[wasm_bindgen]
-pub fn examine_file(filename: &str, mime_type: &str, buf: Vec<u8>) -> CpalStreamHandle {
+pub fn examine_file(filename: &str, mime_type: &str, buf: Vec<u8>) -> Vec<u8> {
   console::log_1(&format!("filename: {}", filename).into());
   console::log_1(&format!("mime type: {}", mime_type).into());
   console::log_1(&format!("length of buf: {} bytes", buf.len()).into());
@@ -344,7 +148,7 @@ pub fn examine_file(filename: &str, mime_type: &str, buf: Vec<u8>) -> CpalStream
 
   console::log_1(&format!("initial codec params: {:?}", decoder.codec_params()).into());
 
-  let mut output_stream: Option<CpalAudioOutputImpl> = None;
+  let mut result: Vec<u8> = Vec::new();
 
   loop {
     let packet = match format.next_packet() {
@@ -359,25 +163,12 @@ pub fn examine_file(filename: &str, mime_type: &str, buf: Vec<u8>) -> CpalStream
       }
     };
     let audio_buf_ref = decoder.decode(&packet).expect("failed to decode packet");
-    if output_stream.is_none() {
-      let duration: Duration = audio_buf_ref.capacity() as _;
-      let signal_spec = audio_buf_ref.spec().clone();
-      console::log_1(&format!("current signal spec: {:?}", &signal_spec).into());
-      let cpal_stream = match CpalAudioOutput::try_open(signal_spec, duration) {
-        Ok(stream) => stream,
-        Err(e) => {
-          panic!("error opening cpal output stream: {}", e);
-        }
-      };
-      output_stream.replace(cpal_stream);
-    }
-    if let Err(e) = output_stream
-      .as_mut()
-      .expect("output stream was initialized just above")
-      .write(audio_buf_ref)
-    {
-      panic!("error writing to output stream: {}", e);
-    }
+    let duration: Duration = audio_buf_ref.capacity() as _;
+    let signal_spec = audio_buf_ref.spec().clone();
+    let mut sample_buffer: SampleBuffer<f32> = SampleBuffer::new(duration, signal_spec);
+    sample_buffer.copy_planar_ref(audio_buf_ref);
+    let sample_bytes: &[u8] = unsafe { mem::transmute::<&[f32], &[u8]>(sample_buffer.samples()) };
+    result.extend(sample_bytes);
   }
 
   if let FinalizeResult {
@@ -390,13 +181,7 @@ pub fn examine_file(filename: &str, mime_type: &str, buf: Vec<u8>) -> CpalStream
     );
   }
 
-  match output_stream {
-    None => panic!("no output stream was created!"),
-    Some(mut stream) => {
-      stream.flush();
-      CpalStreamHandle(stream)
-    }
-  }
+  result
 }
 
 /* NB: if Handle is used instead of &Handle then the object must *immediately* be freed by calling

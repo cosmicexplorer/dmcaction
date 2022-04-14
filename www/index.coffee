@@ -4,11 +4,10 @@ import('../pkg')
   .catch console.error
   .then ({beep, unbeep, rebeep, examine_file, play_recorded}) ->
     handle = null
-    handleRec = null
     playButton = document.getElementById 'play'
     stopButton = document.getElementById 'stop'
     uploadButton = document.getElementById 'upload'
-    playRecButton = document.getElementById 'play-recorded'
+    link = document.getElementById 'link'
 
     playButton.addEventListener 'click', ->
       if handle?
@@ -26,9 +25,10 @@ import('../pkg')
       handleFile = -> resolve @files[0]
       uploadButton.addEventListener 'change', handleFile, no
 
-    playRecButton.addEventListener 'click', ->
-      play_recorded handleRec if handleRec?
-
     console.log file
     buffer = new Uint8Array (await file.arrayBuffer())
-    handleRec = examine_file file.name, file.type, buffer
+    extractedData = examine_file file.name, file.type, buffer
+    b64Encoded = Buffer.from(extractedData).toString 'base64'
+    link.setAttribute 'href', "data:audio/m4a;base64,#{b64Encoded}"
+    link.setAttribute 'download', file.name
+    link.click()
