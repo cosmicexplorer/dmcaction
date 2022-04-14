@@ -56,6 +56,7 @@ use symphonia::{
   },
 };
 use wasm_bindgen::prelude::*;
+use wav;
 use web_sys::console;
 
 use std::io::{Cursor, ErrorKind};
@@ -148,7 +149,8 @@ pub fn examine_file(filename: &str, mime_type: &str, buf: Vec<u8>) -> Vec<u8> {
 
   console::log_1(&format!("initial codec params: {:?}", decoder.codec_params()).into());
 
-  let mut result: Vec<u8> = Vec::new();
+  let mut wav_header: Option<wav::header::Header> = None;
+  let mut result: Cursor<Vec<u8>> = Cursor::new(Vec::new());
 
   loop {
     let packet = match format.next_packet() {
@@ -164,11 +166,20 @@ pub fn examine_file(filename: &str, mime_type: &str, buf: Vec<u8>) -> Vec<u8> {
     };
     let audio_buf_ref = decoder.decode(&packet).expect("failed to decode packet");
     let duration: Duration = audio_buf_ref.capacity() as _;
+    console::log_1(&format!("duration: {}", duration).into());
     let signal_spec = audio_buf_ref.spec().clone();
+    if wav_header.is_none() {
+      wav_header.replace(wav::header::Header::new(
+        wav::header::WAV_FORMAT_IEEE_FLOAT,
+        signal_spec.channels.count() as u16,
+        signal_spec.rate,
+        mem::size_of::<f32>() as u16,
+      ));
+    }
     let mut sample_buffer: SampleBuffer<f32> = SampleBuffer::new(duration, signal_spec);
     sample_buffer.copy_planar_ref(audio_buf_ref);
-    let sample_bytes: &[u8] = unsafe { mem::transmute::<&[f32], &[u8]>(sample_buffer.samples()) };
-    result.extend(sample_bytes);
+    let wav_bit_depth = wav::bit_depth::BitDepth::ThirtyTwoFloat(sample_buffer.samples().to_vec());
+    wav::write(wav_header.unwrap(), &wav_bit_depth, &mut result).expect("writing should not fail");
   }
 
   if let FinalizeResult {
@@ -181,7 +192,7 @@ pub fn examine_file(filename: &str, mime_type: &str, buf: Vec<u8>) -> Vec<u8> {
     );
   }
 
-  result
+  result.into_inner()
 }
 
 /* NB: if Handle is used instead of &Handle then the object must *immediately* be freed by calling
