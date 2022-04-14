@@ -37,13 +37,11 @@
 /* Arc<Mutex> can be more clear than needing to grok Orderings: */
 #![allow(clippy::mutex_atomic)]
 
-use clap::{Args, Parser};
+use clap::Parser;
 use displaydoc::Display;
-use lazy_static::lazy_static;
 use regex::Regex;
 use thiserror::Error;
 
-use std::default::Default;
 use std::path::PathBuf;
 
 /// Strip a given audio track from a recording containing a copy of that audio.
@@ -65,17 +63,7 @@ struct Cli {
   canonical_recording: PathBuf,
 
   #[clap(flatten)]
-  phase_shift: PhaseShiftParameters,
-}
-
-#[derive(Args, Debug)]
-struct PhaseShiftParameters {
-  /// The crop parameters for the IRL recording.
-  #[clap(long, default_value_t, parse(try_from_str = time_window))]
-  irl_recording_window: RecordingWindow,
-  /// The crop parameters for the canonical recording.
-  #[clap(long, default_value_t, parse(try_from_str = time_window))]
-  canonical_recording_window: RecordingWindow,
+  phase_shift: phase_shift::PhaseShiftParameters,
 }
 
 #[derive(Debug, Display, Error)]
@@ -88,107 +76,128 @@ enum ParseError {
   InvalidCropWindow(String, String),
 }
 
-/// {minutes}m{seconds}s
-#[derive(Debug, Display, PartialEq, Eq, PartialOrd, Ord)]
-struct Duration {
-  pub minutes: usize,
-  pub seconds: usize,
-}
+mod phase_shift {
+  use clap::Args;
+  use displaydoc::Display;
+  use lazy_static::lazy_static;
+  use regex::Regex;
 
-fn parse_integer(s: &str) -> Result<usize, ParseError> {
-  let result: usize = s
-    .parse()
-    .map_err(|e| ParseError::IntegerParseFailure(format!("{:?}", e)))?;
-  Ok(result)
-}
+  use std::default::Default;
 
-fn minutes_and_seconds(s: &str) -> Result<Duration, ParseError> {
-  lazy_static! {
-    static ref TIME_RE: Regex =
-      Regex::new("(?:(?P<minutes>[0-9]+)m)?(?:(?P<seconds>[0-9]+)s)?").unwrap();
+  use super::ParseError;
+
+  #[derive(Args, Debug)]
+  pub struct PhaseShiftParameters {
+    /// The crop parameters for the IRL recording.
+    #[clap(long, default_value_t, parse(try_from_str = time_window))]
+    irl_recording_window: RecordingWindow,
+    /// The crop parameters for the canonical recording.
+    #[clap(long, default_value_t, parse(try_from_str = time_window))]
+    canonical_recording_window: RecordingWindow,
   }
-  match TIME_RE.captures(s) {
-    Some(captures) => {
-      let minutes: usize = captures
-        .name("minutes")
-        .map(|m| parse_integer(m.as_str()))
-        .unwrap_or(Ok(0))?;
-      let seconds: usize = captures
-        .name("seconds")
-        .map(|m| parse_integer(m.as_str()))
-        .unwrap_or(Ok(0))?;
-      Ok(Duration { minutes, seconds })
+
+  /// {minutes}m{seconds}s
+  #[derive(Debug, Display, PartialEq, Eq, PartialOrd, Ord)]
+  pub struct Duration {
+    pub minutes: usize,
+    pub seconds: usize,
+  }
+
+  fn parse_integer(s: &str) -> Result<usize, ParseError> {
+    let result: usize = s
+      .parse()
+      .map_err(|e| ParseError::IntegerParseFailure(format!("{:?}", e)))?;
+    Ok(result)
+  }
+
+  fn minutes_and_seconds(s: &str) -> Result<Duration, ParseError> {
+    lazy_static! {
+      static ref TIME_RE: Regex =
+        Regex::new("(?:(?P<minutes>[0-9]+)m)?(?:(?P<seconds>[0-9]+)s)?").unwrap();
     }
-    None => Err(ParseError::TimeParseFailure(&TIME_RE, s.to_string())),
-  }
-}
-
-#[derive(Debug, Display)]
-enum MaybeDuration {
-  /// {0}
-  Some(Duration),
-  /// <no crop>
-  None,
-}
-
-impl Default for MaybeDuration {
-  fn default() -> Self {
-    Self::None
-  }
-}
-
-impl From<Option<Duration>> for MaybeDuration {
-  fn from(value: Option<Duration>) -> Self {
-    match value {
-      Some(duration) => MaybeDuration::Some(duration),
-      None => MaybeDuration::None,
-    }
-  }
-}
-
-/// Crop recording to start {start_time} and end {end_time}
-#[derive(Debug, Default, Display)]
-struct RecordingWindow {
-  /// How far into the clip to crop the beginning of the clip.
-  pub start_time: MaybeDuration,
-  /// How far into the clip to crop the end of the clip.
-  pub end_time: MaybeDuration,
-}
-
-fn time_window(s: &str) -> Result<RecordingWindow, ParseError> {
-  lazy_static! {
-    static ref TIME_WINDOW_RE: Regex = Regex::new("(?P<left>[^:]+)?:(?P<right>[^:]+)?").unwrap();
-  }
-  match TIME_WINDOW_RE.captures(s) {
-    Some(captures) => {
-      let left: Option<Duration> = captures
-        .name("left")
-        .map(|m| minutes_and_seconds(m.as_str()))
-        .transpose()?;
-      let right: Option<Duration> = captures
-        .name("right")
-        .map(|m| minutes_and_seconds(m.as_str()))
-        .transpose()?;
-      match (&left, &right) {
-        (Some(left), Some(right)) => {
-          if left > right {
-            return Err(ParseError::InvalidCropWindow(
-              s.to_string(),
-              "left cannot be greater than right crop point".to_string(),
-            ));
-          }
-        }
-        _ => (),
+    match TIME_RE.captures(s) {
+      Some(captures) => {
+        let minutes: usize = captures
+          .name("minutes")
+          .map(|m| parse_integer(m.as_str()))
+          .unwrap_or(Ok(0))?;
+        let seconds: usize = captures
+          .name("seconds")
+          .map(|m| parse_integer(m.as_str()))
+          .unwrap_or(Ok(0))?;
+        Ok(Duration { minutes, seconds })
       }
-      Ok(RecordingWindow {
-        start_time: left.into(),
-        end_time: right.into(),
-      })
+      None => Err(ParseError::TimeParseFailure(&TIME_RE, s.to_string())),
     }
-    None => Ok(RecordingWindow {
-      start_time: None.into(),
-      end_time: None.into(),
-    }),
+  }
+
+  #[derive(Debug, Display)]
+  pub enum MaybeDuration {
+    /// {0}
+    Some(Duration),
+    /// <no crop>
+    None,
+  }
+
+  impl Default for MaybeDuration {
+    fn default() -> Self {
+      Self::None
+    }
+  }
+
+  impl From<Option<Duration>> for MaybeDuration {
+    fn from(value: Option<Duration>) -> Self {
+      match value {
+        Some(duration) => MaybeDuration::Some(duration),
+        None => MaybeDuration::None,
+      }
+    }
+  }
+
+  /// Crop recording to start {start_time} and end {end_time}
+  #[derive(Debug, Default, Display)]
+  pub struct RecordingWindow {
+    /// How far into the clip to crop the beginning of the clip.
+    pub start_time: MaybeDuration,
+    /// How far into the clip to crop the end of the clip.
+    pub end_time: MaybeDuration,
+  }
+
+  fn time_window(s: &str) -> Result<RecordingWindow, ParseError> {
+    lazy_static! {
+      static ref TIME_WINDOW_RE: Regex = Regex::new("(?P<left>[^:]+)?:(?P<right>[^:]+)?").unwrap();
+    }
+    match TIME_WINDOW_RE.captures(s) {
+      Some(captures) => {
+        let left: Option<Duration> = captures
+          .name("left")
+          .map(|m| minutes_and_seconds(m.as_str()))
+          .transpose()?;
+        let right: Option<Duration> = captures
+          .name("right")
+          .map(|m| minutes_and_seconds(m.as_str()))
+          .transpose()?;
+        match (&left, &right) {
+          (Some(left), Some(right)) => {
+            if left > right {
+              return Err(ParseError::InvalidCropWindow(
+                s.to_string(),
+                "left cannot be greater than right crop point".to_string(),
+              ));
+            }
+          }
+          _ => (),
+        }
+        Ok(RecordingWindow {
+          start_time: left.into(),
+          end_time: right.into(),
+        })
+      }
+      None => Ok(RecordingWindow {
+        start_time: None.into(),
+        end_time: None.into(),
+      }),
+    }
   }
 }
 
