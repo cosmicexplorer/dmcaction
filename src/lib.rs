@@ -66,6 +66,12 @@ pub fn main_js() -> Result<(), JsValue> {
 #[wasm_bindgen]
 pub struct Handle(Stream);
 
+impl Handle {
+  pub fn stream(&self) -> &Stream {
+    &self.0
+  }
+}
+
 #[wasm_bindgen]
 pub fn beep() -> Handle {
   let host = cpal::default_host();
@@ -79,6 +85,23 @@ pub fn beep() -> Handle {
     cpal::SampleFormat::I16 => run::<i16>(&device, &config.into()),
     cpal::SampleFormat::U16 => run::<u16>(&device, &config.into()),
   })
+}
+
+/* NB: if Handle is used instead of &Handle then the object must *immediately* be freed by calling
+ * .free() in js after being used as the argument once! Otherwise complains of receiving null
+ * pointer or use after move. */
+#[wasm_bindgen]
+pub fn rebeep(handle: &Handle) {
+  let stream = handle.stream();
+  console::log_1(&format!("rebeeped!").into());
+  stream.play().unwrap();
+}
+
+#[wasm_bindgen]
+pub fn unbeep(handle: &Handle) {
+  let stream = handle.stream();
+  console::log_1(&format!("unbeeped!").into());
+  stream.pause().unwrap();
 }
 
 fn run<T>(device: &cpal::Device, config: &cpal::StreamConfig) -> Stream

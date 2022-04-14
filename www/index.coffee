@@ -6,9 +6,13 @@ import('../pkg')
     stopButton = document.getElementById 'stop'
 
     playButton.addEventListener 'click', ->
-      handle = rustModule.beep()
+      if handle?
+        rustModule.rebeep handle
+      else
+        handle = rustModule.beep()
 
     stopButton.addEventListener 'click', ->
       if handle?
-        handle.free()
-        handle = null
+        rustModule.unbeep handle
+        # handle.free()
+        # handle = null
