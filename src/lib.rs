@@ -154,7 +154,7 @@ impl CpalAudioOutput {
   pub fn try_open(
     spec: SignalSpec,
     duration: Duration,
-  ) -> Result<Box<dyn AudioOutput>, SoundManipulationError> {
+  ) -> Result<CpalAudioOutputImpl, SoundManipulationError> {
     // Get default host.
     let host = cpal::default_host();
 
@@ -179,28 +179,45 @@ impl CpalAudioOutput {
 
     // Select proper playback routine based on sample format.
     match config.sample_format() {
-      cpal::SampleFormat::F32 => CpalAudioOutputImpl::<f32>::try_open(spec, duration, &device),
-      cpal::SampleFormat::I16 => CpalAudioOutputImpl::<i16>::try_open(spec, duration, &device),
-      cpal::SampleFormat::U16 => CpalAudioOutputImpl::<u16>::try_open(spec, duration, &device),
+      cpal::SampleFormat::F32 => CpalAudioOutputImpl::try_open(spec, duration, &device),
+      x => unreachable!(
+        "can't process anything except f32 for now: got format {:?}",
+        x
+      ),
+      /* cpal::SampleFormat::I16 => CpalAudioOutputImpl::<i16>::try_open(spec, duration, &device), */
+      /* cpal::SampleFormat::U16 => CpalAudioOutputImpl::<u16>::try_open(spec, duration, &device), */
     }
   }
 }
 
-struct CpalAudioOutputImpl<T: AudioOutputSample>
-where
-  T: AudioOutputSample,
-{
-  ring_buf_producer: ringbuf::Producer<T>,
-  sample_buf: SampleBuffer<T>,
+#[wasm_bindgen]
+pub struct CpalAudioOutputImpl {
+  ring_buf_producer: ringbuf::Producer<f32>,
+  sample_buf: SampleBuffer<f32>,
   stream: cpal::Stream,
 }
 
-impl<T: AudioOutputSample> CpalAudioOutputImpl<T> {
+impl CpalAudioOutputImpl {
+  pub fn stream(&self) -> &cpal::Stream {
+    &self.stream
+  }
+}
+
+#[wasm_bindgen]
+pub struct CpalStreamHandle(CpalAudioOutputImpl);
+
+impl CpalStreamHandle {
+  pub fn inner(&self) -> &CpalAudioOutputImpl {
+    &self.0
+  }
+}
+
+impl CpalAudioOutputImpl {
   pub fn try_open(
     spec: SignalSpec,
     duration: Duration,
     device: &cpal::Device,
-  ) -> Result<Box<dyn AudioOutput>, SoundManipulationError> {
+  ) -> Result<Self, SoundManipulationError> {
     let num_channels = spec.channels.count();
 
     // Output audio stream config.
@@ -212,15 +229,14 @@ impl<T: AudioOutputSample> CpalAudioOutputImpl<T> {
 
     // Create a ring buffer with a capacity for up-to 200ms of audio.
     let ring_len: usize = ((200 * spec.rate as usize) / 1000) * num_channels;
-    /* NB: add more space, see if it works now. */
-    let ring_len: usize = ring_len * 100;
+    let ring_len: usize = ring_len * 1000;
 
     let ring_buf = ringbuf::RingBuffer::new(ring_len);
     let (ring_buf_producer, mut ring_buf_consumer) = ring_buf.split();
 
     let stream_result = device.build_output_stream(
       &config,
-      move |data: &mut [T], _: &cpal::OutputCallbackInfo| {
+      move |data: &mut [f32], _: &cpal::OutputCallbackInfo| {
         // Write out as many samples as possible from the ring buffer to the audio
         // output.
         let written = ring_buf_consumer.pop_slice(data);
@@ -244,19 +260,19 @@ impl<T: AudioOutputSample> CpalAudioOutputImpl<T> {
           return Err(SoundManipulationError::PlayStreamError);
         }
 
-        let sample_buf = SampleBuffer::<T>::new(duration, spec);
+        let sample_buf = SampleBuffer::<f32>::new(duration, spec);
 
-        Ok(Box::new(CpalAudioOutputImpl {
+        Ok(CpalAudioOutputImpl {
           ring_buf_producer,
           sample_buf,
           stream,
-        }))
+        })
       }
     }
   }
 }
 
-impl<T: AudioOutputSample> AudioOutput for CpalAudioOutputImpl<T> {
+impl AudioOutput for CpalAudioOutputImpl {
   fn write(&mut self, decoded: AudioBufferRef<'_>) -> Result<(), SoundManipulationError> {
     // Do nothing if there are no audio frames.
     if decoded.frames() == 0 {
@@ -268,9 +284,7 @@ impl<T: AudioOutputSample> AudioOutput for CpalAudioOutputImpl<T> {
     self.sample_buf.copy_interleaved_ref(decoded);
 
     // Write all the interleaved samples to the ring buffer.
-    let samples: &[T] = self.sample_buf.samples();
-
-    console::log_1(&format!("samples: {:?}", samples).into());
+    let samples: &[f32] = self.sample_buf.samples();
 
     let written: usize = self.ring_buf_producer.push_slice(samples);
     assert_eq!(written, samples.len());
@@ -289,7 +303,15 @@ impl<T: AudioOutputSample> AudioOutput for CpalAudioOutputImpl<T> {
 }
 
 #[wasm_bindgen]
-pub fn examine_file(filename: &str, mime_type: &str, buf: Vec<u8>) {
+pub fn play_recorded(handle: &CpalStreamHandle) {
+  let inner = handle.inner();
+  let stream = inner.stream();
+  console::log_1(&format!("playing now!!").into());
+  stream.play().unwrap();
+}
+
+#[wasm_bindgen]
+pub fn examine_file(filename: &str, mime_type: &str, buf: Vec<u8>) -> CpalStreamHandle {
   console::log_1(&format!("filename: {}", filename).into());
   console::log_1(&format!("mime type: {}", mime_type).into());
   console::log_1(&format!("length of buf: {} bytes", buf.len()).into());
@@ -322,7 +344,7 @@ pub fn examine_file(filename: &str, mime_type: &str, buf: Vec<u8>) {
 
   console::log_1(&format!("initial codec params: {:?}", decoder.codec_params()).into());
 
-  let mut output_stream: Option<Box<dyn AudioOutput>> = None;
+  let mut output_stream: Option<CpalAudioOutputImpl> = None;
 
   loop {
     let packet = match format.next_packet() {
@@ -337,7 +359,6 @@ pub fn examine_file(filename: &str, mime_type: &str, buf: Vec<u8>) {
       }
     };
     let audio_buf_ref = decoder.decode(&packet).expect("failed to decode packet");
-    console::log_1(&format!("audio_buf_ref.frames(): {}", audio_buf_ref.frames()).into());
     if output_stream.is_none() {
       let duration: Duration = audio_buf_ref.capacity() as _;
       let signal_spec = audio_buf_ref.spec().clone();
@@ -369,13 +390,13 @@ pub fn examine_file(filename: &str, mime_type: &str, buf: Vec<u8>) {
     );
   }
 
-  if let Some(mut stream) = output_stream {
-    stream.flush();
+  match output_stream {
+    None => panic!("no output stream was created!"),
+    Some(mut stream) => {
+      stream.flush();
+      CpalStreamHandle(stream)
+    }
   }
-
-  /* console::log_1(&format!("track type: {:?}", track.track_type().unwrap()).into()); */
-  /* console::log_1(&format!("media type: {:?}", track.media_type().unwrap()).into()); */
-  /* console::log_1(&format!("sample count: {}", track.sample_count()).into()); */
 }
 
 /* NB: if Handle is used instead of &Handle then the object must *immediately* be freed by calling
