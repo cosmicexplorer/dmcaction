@@ -4,9 +4,9 @@
 //! ???
 
 /* Turn all warnings into errors! */
-/* #![deny(warnings)] */
+#![deny(warnings)]
 /* Warn for missing docs in general, and hard require crate-level docs. */
-/* #![warn(missing_docs)] */
+#![warn(missing_docs)]
 #![deny(rustdoc::missing_crate_level_docs)]
 /* Make all doctests fail if they produce any warnings. */
 #![doc(test(attr(deny(warnings))))]
@@ -37,47 +37,163 @@
 /* Arc<Mutex> can be more clear than needing to grok Orderings: */
 #![allow(clippy::mutex_atomic)]
 
-use rand;
-use rgsl::{
-  sort::vectors::sort_index,
-  types::wavelet_transforms::{Wavelet, WaveletType, WaveletWorkspace},
-  wavelet_transforms::one_dimension::{transform_forward, transform_inverse},
-  Value,
-};
+use clap::{Args, Parser};
+use displaydoc::Display;
+use lazy_static::lazy_static;
+use regex::Regex;
+use thiserror::Error;
 
-const N: usize = 256;
-const NC: usize = 20;
-const RANGE: f64 = 10.0;
+use std::default::Default;
+use std::path::PathBuf;
+
+/// Strip a given audio track from a recording containing a copy of that audio.
+///
+/// This may be especially useful for avoiding copyright infringement claims from online services
+/// which operate in the US and perform automated scanning for copyrighted audio in order to conform
+/// to the DMCA.
+#[derive(Parser, Debug)]
+#[clap(author, version)]
+struct Cli {
+  /// A file which contains PCM-format audio from which the canonical recording should be stripped.
+  #[clap(short, long, parse(from_os_str))]
+  irl_recording: PathBuf,
+
+  /// A file which contains PCM-format audio that should be stripped from the IRL recording.
+  ///
+  /// The sample rate need not match that of the IRL recording.
+  #[clap(short, long, parse(from_os_str))]
+  canonical_recording: PathBuf,
+
+  #[clap(flatten)]
+  phase_shift: PhaseShiftParameters,
+}
+
+#[derive(Args, Debug)]
+struct PhaseShiftParameters {
+  /// The crop parameters for the IRL recording.
+  #[clap(long, default_value_t, parse(try_from_str = time_window))]
+  irl_recording_window: RecordingWindow,
+  /// The crop parameters for the canonical recording.
+  #[clap(long, default_value_t, parse(try_from_str = time_window))]
+  canonical_recording_window: RecordingWindow,
+}
+
+#[derive(Debug, Display, Error)]
+enum ParseError {
+  /// Failed to parse time in {0} format: {1}
+  TimeParseFailure(&'static Regex, String),
+  /// Failed to parse integer numeral {0}
+  IntegerParseFailure(String),
+  /// Invalid crop window {0}: {1}
+  InvalidCropWindow(String, String),
+}
+
+/// {minutes}m{seconds}s
+#[derive(Debug, Display, PartialEq, Eq, PartialOrd, Ord)]
+struct Duration {
+  pub minutes: usize,
+  pub seconds: usize,
+}
+
+fn parse_integer(s: &str) -> Result<usize, ParseError> {
+  let result: usize = s
+    .parse()
+    .map_err(|e| ParseError::IntegerParseFailure(format!("{:?}", e)))?;
+  Ok(result)
+}
+
+fn minutes_and_seconds(s: &str) -> Result<Duration, ParseError> {
+  lazy_static! {
+    static ref TIME_RE: Regex =
+      Regex::new("(?:(?P<minutes>[0-9]+)m)?(?:(?P<seconds>[0-9]+)s)?").unwrap();
+  }
+  match TIME_RE.captures(s) {
+    Some(captures) => {
+      let minutes: usize = captures
+        .name("minutes")
+        .map(|m| parse_integer(m.as_str()))
+        .unwrap_or(Ok(0))?;
+      let seconds: usize = captures
+        .name("seconds")
+        .map(|m| parse_integer(m.as_str()))
+        .unwrap_or(Ok(0))?;
+      Ok(Duration { minutes, seconds })
+    }
+    None => Err(ParseError::TimeParseFailure(&TIME_RE, s.to_string())),
+  }
+}
+
+#[derive(Debug, Display)]
+enum MaybeDuration {
+  /// {0}
+  Some(Duration),
+  /// <no crop>
+  None,
+}
+
+impl Default for MaybeDuration {
+  fn default() -> Self {
+    Self::None
+  }
+}
+
+impl From<Option<Duration>> for MaybeDuration {
+  fn from(value: Option<Duration>) -> Self {
+    match value {
+      Some(duration) => MaybeDuration::Some(duration),
+      None => MaybeDuration::None,
+    }
+  }
+}
+
+/// Crop recording to start {start_time} and end {end_time}
+#[derive(Debug, Default, Display)]
+struct RecordingWindow {
+  /// How far into the clip to crop the beginning of the clip.
+  pub start_time: MaybeDuration,
+  /// How far into the clip to crop the end of the clip.
+  pub end_time: MaybeDuration,
+}
+
+fn time_window(s: &str) -> Result<RecordingWindow, ParseError> {
+  lazy_static! {
+    static ref TIME_WINDOW_RE: Regex = Regex::new("(?P<left>[^:]+)?:(?P<right>[^:]+)?").unwrap();
+  }
+  match TIME_WINDOW_RE.captures(s) {
+    Some(captures) => {
+      let left: Option<Duration> = captures
+        .name("left")
+        .map(|m| minutes_and_seconds(m.as_str()))
+        .transpose()?;
+      let right: Option<Duration> = captures
+        .name("right")
+        .map(|m| minutes_and_seconds(m.as_str()))
+        .transpose()?;
+      match (&left, &right) {
+        (Some(left), Some(right)) => {
+          if left > right {
+            return Err(ParseError::InvalidCropWindow(
+              s.to_string(),
+              "left cannot be greater than right crop point".to_string(),
+            ));
+          }
+        }
+        _ => (),
+      }
+      Ok(RecordingWindow {
+        start_time: left.into(),
+        end_time: right.into(),
+      })
+    }
+    None => Ok(RecordingWindow {
+      start_time: None.into(),
+      end_time: None.into(),
+    }),
+  }
+}
 
 fn main() {
-  let mut orig_data: [f64; N] = [0.0; N];
-  for i in 0..N {
-    orig_data[i] = rand::random::<f64>() * RANGE;
-  }
-  let mut data: [f64; N] = orig_data;
-  let mut abscoeff: [f64; N] = [0.0; N];
-  let mut p: [usize; N] = [0; N];
+  let args = Cli::parse();
 
-  let wavelet = Wavelet::new(WaveletType::daubechies(), 4).expect("no we have enough memory");
-  let mut workspace = WaveletWorkspace::new(N).expect("no we have enough memory");
-
-  let result = transform_forward(&wavelet, &mut data, 1, N, &mut workspace);
-  assert_eq!(result, Value::Success);
-
-  for i in 0..N {
-    abscoeff[i] = data[i].abs();
-  }
-
-  sort_index(&mut p, &mut abscoeff, 1, N);
-
-  for i in 0..(N - NC) {
-    data[p[i]] = 0.0;
-  }
-
-  let result = transform_inverse(&wavelet, &mut data, 1, N, &mut workspace);
-  assert_eq!(result, Value::Success);
-
-  for i in 0..N {
-    println!("{} {}", orig_data[i], data[i]);
-  }
+  dbg!(args);
 }

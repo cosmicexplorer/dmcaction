@@ -1,15 +1,17 @@
 [package]
 name = "dmcaction"
+description = "Strip audio tracks from recordings."
 version = "0.1.0"
 edition = "2021"
 license = "AGPL-3.0-only"
+repository = "https://github.com/cosmicexplorer/dmcaction"
 authors = ["Danny McClanahan <dmcC2@hypnicjerk.ai>"]
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
-rand = "0.8"
-
-[dependencies.GSL]
-version = "6"
-features = ["v2_7"]
+clap = { version = "3.1.8", features = ["derive"] }
+displaydoc = "0.2"
+lazy_static = "1.4.0"
+regex = "1"
+thiserror = "1.0.24"
