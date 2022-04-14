@@ -41,8 +41,11 @@ use cpal::{
   traits::{DeviceTrait, HostTrait, StreamTrait},
   Stream,
 };
+use mp4::Mp4Reader;
 use wasm_bindgen::prelude::*;
 use web_sys::console;
+
+use std::io::Cursor;
 
 // When the `wee_alloc` feature is enabled, this uses `wee_alloc` as the global
 // allocator.
@@ -85,6 +88,31 @@ pub fn beep() -> Handle {
     cpal::SampleFormat::I16 => run::<i16>(&device, &config.into()),
     cpal::SampleFormat::U16 => run::<u16>(&device, &config.into()),
   })
+}
+
+#[wasm_bindgen]
+pub fn examine_bytes(buf: &[u8]) {
+  console::log_1(&format!("length of buf: {} bytes", buf.len()).into());
+  let c = Cursor::new(buf);
+  let size = buf.len() as u64;
+  let mp4 = Mp4Reader::read_header(c, size).expect("expected valid mp4 file");
+
+  for (track_id, track) in mp4.tracks().iter() {
+    console::log_1(&format!("track type: {:?}", track.track_type().unwrap()).into());
+    console::log_1(&format!("media type: {:?}", track.media_type().unwrap()).into());
+    console::log_1(&format!("sample count: {}", track.sample_count()).into());
+
+    /* for sample_idx in 0..track.sample_count() { */
+    /*   /\* TODO: are the indices 1-based in this format? This part is taken from https://github.com/alfg/mp4-inspector/blob/c98cf4692345640a8e8e791e220354671a7543c3/src/lib.rs#L134. *\/ */
+    /*   let sample_id = sample_idx + 1; */
+    /*   let sample = mp4 */
+    /*     .read_sample(track_id, sample_id) */
+    /*     .expect("this sample index should be within range"); */
+    /*   let bytes: &[u8] = sample.bytes.as_ref(); */
+    /* } */
+    /* let audio_profile = track.audio_profile().expect("expected audio maybe???"); */
+    /* console::log_1(&format!("audio type: {:?}", audio_profile).into()); */
+  }
 }
 
 /* NB: if Handle is used instead of &Handle then the object must *immediately* be freed by calling
