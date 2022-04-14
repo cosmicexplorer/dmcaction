@@ -150,6 +150,7 @@ pub fn examine_file(filename: &str, mime_type: &str, buf: Vec<u8>) -> Vec<u8> {
   console::log_1(&format!("initial codec params: {:?}", decoder.codec_params()).into());
 
   let mut wav_header: Option<wav::header::Header> = None;
+  let mut floats: Vec<f32> = Vec::new();
   let mut result: Cursor<Vec<u8>> = Cursor::new(Vec::new());
 
   loop {
@@ -166,20 +167,23 @@ pub fn examine_file(filename: &str, mime_type: &str, buf: Vec<u8>) -> Vec<u8> {
     };
     let audio_buf_ref = decoder.decode(&packet).expect("failed to decode packet");
     let duration: Duration = audio_buf_ref.capacity() as _;
-    console::log_1(&format!("duration: {}", duration).into());
     let signal_spec = audio_buf_ref.spec().clone();
     if wav_header.is_none() {
       wav_header.replace(wav::header::Header::new(
         wav::header::WAV_FORMAT_IEEE_FLOAT,
         signal_spec.channels.count() as u16,
         signal_spec.rate,
-        mem::size_of::<f32>() as u16,
+        (mem::size_of::<f32>() * 8) as u16,
       ));
     }
     let mut sample_buffer: SampleBuffer<f32> = SampleBuffer::new(duration, signal_spec);
     sample_buffer.copy_planar_ref(audio_buf_ref);
-    let wav_bit_depth = wav::bit_depth::BitDepth::ThirtyTwoFloat(sample_buffer.samples().to_vec());
-    wav::write(wav_header.unwrap(), &wav_bit_depth, &mut result).expect("writing should not fail");
+    floats.extend(sample_buffer.samples());
+  }
+
+  if let Some(wav_header) = wav_header {
+    let wav_bit_depth = wav::bit_depth::BitDepth::ThirtyTwoFloat(floats);
+    wav::write(wav_header, &wav_bit_depth, &mut result).expect("writing should not fail");
   }
 
   if let FinalizeResult {
