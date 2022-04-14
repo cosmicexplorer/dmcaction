@@ -2,7 +2,7 @@
 
 import('../pkg')
   .catch console.error
-  .then ({beep, unbeep, rebeep, examine_bytes}) ->
+  .then ({beep, unbeep, rebeep, examine_file}) ->
     handle = null
     playButton = document.getElementById 'play'
     stopButton = document.getElementById 'stop'
@@ -26,4 +26,4 @@ import('../pkg')
 
     console.log file
     buffer = new Uint8Array (await file.arrayBuffer())
-    examine_bytes buffer
+    examine_file file.name, file.type, buffer

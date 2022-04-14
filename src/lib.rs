@@ -4,7 +4,7 @@
 //! ???
 
 /* Turn all warnings into errors! */
-#![deny(warnings)]
+/* #![deny(warnings)] */
 /* Warn for missing docs in general, and hard require crate-level docs. */
 /* #![warn(missing_docs)] */
 #![deny(rustdoc::missing_crate_level_docs)]
@@ -38,14 +38,33 @@
 #![allow(clippy::mutex_atomic)]
 
 use cpal::{
+  self,
   traits::{DeviceTrait, HostTrait, StreamTrait},
   Stream,
 };
-use mp4::Mp4Reader;
+use displaydoc::Display;
+use ringbuf;
+use symphonia::{
+  self,
+  core::{
+    audio::{AudioBufferRef, RawSample, SampleBuffer, SignalSpec},
+    codecs::{DecoderOptions, FinalizeResult},
+    conv::ConvertibleSample,
+    errors::Error as SymphoniaError,
+    formats::FormatOptions,
+    io::{MediaSourceStream, MediaSourceStreamOptions},
+    meta::{Limit, MetadataOptions},
+    probe::{Hint, ProbeResult},
+    units::Duration,
+  },
+};
+use thiserror::Error;
 use wasm_bindgen::prelude::*;
 use web_sys::console;
 
-use std::io::Cursor;
+use std::fmt::Debug;
+use std::io::{Cursor, ErrorKind};
+use std::marker::Send;
 
 // When the `wee_alloc` feature is enabled, this uses `wee_alloc` as the global
 // allocator.
@@ -90,29 +109,273 @@ pub fn beep() -> Handle {
   })
 }
 
+fn is_normal_eof(e: &SymphoniaError) -> bool {
+  match e {
+    SymphoniaError::IoError(e) => match e.kind() {
+      ErrorKind::UnexpectedEof => true,
+      _ => false,
+    },
+    _ => false,
+  }
+}
+
+#[derive(Debug, Error, Display)]
+pub enum SoundManipulationError {
+  /// error opening stream
+  OpenStreamError,
+  /// error playing stream
+  PlayStreamError,
+  /// error closing stream
+  StreamClosedError,
+  /* /// io error: {0} */
+  /* IoError(#[from] io::Error), */
+}
+
+/// Taken from symphonia's examples: https://github.com/pdeljanov/Symphonia/blob/8f4aaed599ba8c23aab55d1bdad65ed621a68b92/symphonia-play/src/output.rs#L15-L18.
+pub trait AudioOutput {
+  fn write(&mut self, audio_buf_ref: AudioBufferRef<'_>) -> Result<(), SoundManipulationError>;
+  fn flush(&mut self);
+  fn stream(&self) -> &cpal::Stream;
+}
+
+/// This is taken from later in that file: https://github.com/pdeljanov/Symphonia/blob/8f4aaed599ba8c23aab55d1bdad65ed621a68b92/symphonia-play/src/output.rs#L182-L187.
+pub struct CpalAudioOutput;
+
+trait AudioOutputSample:
+  cpal::Sample + ConvertibleSample + RawSample + Send + Copy + Debug + 'static
+{
+}
+
+impl AudioOutputSample for f32 {}
+impl AudioOutputSample for i16 {}
+impl AudioOutputSample for u16 {}
+
+impl CpalAudioOutput {
+  pub fn try_open(
+    spec: SignalSpec,
+    duration: Duration,
+  ) -> Result<Box<dyn AudioOutput>, SoundManipulationError> {
+    // Get default host.
+    let host = cpal::default_host();
+
+    // Get the default audio output device.
+    let device = match host.default_output_device() {
+      Some(device) => device,
+      _ => {
+        console::error_1(&format!("failed to get default audio output device").into());
+        return Err(SoundManipulationError::OpenStreamError);
+      }
+    };
+
+    let config = match device.default_output_config() {
+      Ok(config) => config,
+      Err(err) => {
+        console::error_1(
+          &format!("failed to get default audio output device config: {}", err).into(),
+        );
+        return Err(SoundManipulationError::OpenStreamError);
+      }
+    };
+
+    // Select proper playback routine based on sample format.
+    match config.sample_format() {
+      cpal::SampleFormat::F32 => CpalAudioOutputImpl::<f32>::try_open(spec, duration, &device),
+      cpal::SampleFormat::I16 => CpalAudioOutputImpl::<i16>::try_open(spec, duration, &device),
+      cpal::SampleFormat::U16 => CpalAudioOutputImpl::<u16>::try_open(spec, duration, &device),
+    }
+  }
+}
+
+struct CpalAudioOutputImpl<T: AudioOutputSample>
+where
+  T: AudioOutputSample,
+{
+  ring_buf_producer: ringbuf::Producer<T>,
+  sample_buf: SampleBuffer<T>,
+  stream: cpal::Stream,
+}
+
+impl<T: AudioOutputSample> CpalAudioOutputImpl<T> {
+  pub fn try_open(
+    spec: SignalSpec,
+    duration: Duration,
+    device: &cpal::Device,
+  ) -> Result<Box<dyn AudioOutput>, SoundManipulationError> {
+    let num_channels = spec.channels.count();
+
+    // Output audio stream config.
+    let config = cpal::StreamConfig {
+      channels: num_channels as cpal::ChannelCount,
+      sample_rate: cpal::SampleRate(spec.rate),
+      buffer_size: cpal::BufferSize::Default,
+    };
+
+    // Create a ring buffer with a capacity for up-to 200ms of audio.
+    let ring_len: usize = ((200 * spec.rate as usize) / 1000) * num_channels;
+    /* NB: add more space, see if it works now. */
+    let ring_len: usize = ring_len * 100;
+
+    let ring_buf = ringbuf::RingBuffer::new(ring_len);
+    let (ring_buf_producer, mut ring_buf_consumer) = ring_buf.split();
+
+    let stream_result = device.build_output_stream(
+      &config,
+      move |data: &mut [T], _: &cpal::OutputCallbackInfo| {
+        // Write out as many samples as possible from the ring buffer to the audio
+        // output.
+        let written = ring_buf_consumer.pop_slice(data);
+        assert_eq!(written, data.len());
+        /* // Mute any remaining samples. */
+        /* data[written..].iter_mut().for_each(|s| *s = T::MID); */
+      },
+      move |err| console::error_1(&format!("audio output error: {}", err).into()),
+    );
+
+    match stream_result {
+      Err(err) => {
+        console::error_1(&format!("audio output stream open error: {}", err).into());
+        return Err(SoundManipulationError::OpenStreamError);
+      }
+      Ok(stream) => {
+        // Start the output stream.
+        if let Err(err) = stream.play() {
+          console::error_1(&format!("audio output stream play error: {}", err).into());
+
+          return Err(SoundManipulationError::PlayStreamError);
+        }
+
+        let sample_buf = SampleBuffer::<T>::new(duration, spec);
+
+        Ok(Box::new(CpalAudioOutputImpl {
+          ring_buf_producer,
+          sample_buf,
+          stream,
+        }))
+      }
+    }
+  }
+}
+
+impl<T: AudioOutputSample> AudioOutput for CpalAudioOutputImpl<T> {
+  fn write(&mut self, decoded: AudioBufferRef<'_>) -> Result<(), SoundManipulationError> {
+    // Do nothing if there are no audio frames.
+    if decoded.frames() == 0 {
+      return Ok(());
+    }
+
+    // Audio samples must be interleaved for cpal. Interleave the samples in the audio
+    // buffer into the sample buffer.
+    self.sample_buf.copy_interleaved_ref(decoded);
+
+    // Write all the interleaved samples to the ring buffer.
+    let samples: &[T] = self.sample_buf.samples();
+
+    console::log_1(&format!("samples: {:?}", samples).into());
+
+    let written: usize = self.ring_buf_producer.push_slice(samples);
+    assert_eq!(written, samples.len());
+
+    Ok(())
+  }
+
+  fn flush(&mut self) {
+    // Flush is best-effort, ignore the returned result.
+    let _ = self.stream.pause();
+  }
+
+  fn stream(&self) -> &cpal::Stream {
+    &self.stream
+  }
+}
+
 #[wasm_bindgen]
-pub fn examine_bytes(buf: &[u8]) {
+pub fn examine_file(filename: &str, mime_type: &str, buf: Vec<u8>) {
+  console::log_1(&format!("filename: {}", filename).into());
+  console::log_1(&format!("mime type: {}", mime_type).into());
   console::log_1(&format!("length of buf: {} bytes", buf.len()).into());
   let c = Cursor::new(buf);
-  let size = buf.len() as u64;
-  let mp4 = Mp4Reader::read_header(c, size).expect("expected valid mp4 file");
 
-  for (track_id, track) in mp4.tracks().iter() {
-    console::log_1(&format!("track type: {:?}", track.track_type().unwrap()).into());
-    console::log_1(&format!("media type: {:?}", track.media_type().unwrap()).into());
-    console::log_1(&format!("sample count: {}", track.sample_count()).into());
+  let known_codecs = symphonia::default::get_codecs();
+  let probe = symphonia::default::get_probe();
+  let stream = MediaSourceStream::new(Box::new(c), MediaSourceStreamOptions::default());
 
-    /* for sample_idx in 0..track.sample_count() { */
-    /*   /\* TODO: are the indices 1-based in this format? This part is taken from https://github.com/alfg/mp4-inspector/blob/c98cf4692345640a8e8e791e220354671a7543c3/src/lib.rs#L134. *\/ */
-    /*   let sample_id = sample_idx + 1; */
-    /*   let sample = mp4 */
-    /*     .read_sample(track_id, sample_id) */
-    /*     .expect("this sample index should be within range"); */
-    /*   let bytes: &[u8] = sample.bytes.as_ref(); */
-    /* } */
-    /* let audio_profile = track.audio_profile().expect("expected audio maybe???"); */
-    /* console::log_1(&format!("audio type: {:?}", audio_profile).into()); */
+  let mut hint = Hint::new();
+  hint.mime_type(mime_type);
+  let format_options = FormatOptions::default();
+  let metadata_options = MetadataOptions {
+    limit_metadata_bytes: Limit::None,
+    limit_visual_bytes: Limit::None,
+  };
+
+  let ProbeResult { mut format, .. } = probe
+    .format(&hint, stream, &format_options, &metadata_options)
+    .expect("failed to probe media format");
+  let tracks = format.tracks();
+  console::log_1(&format!("number of detected tracks: {}", tracks.len()).into());
+  assert_eq!(tracks.len(), 1, "not exactly one track");
+  let single_track = &tracks[0];
+
+  let decoder_options = DecoderOptions { verify: true };
+  let mut decoder = known_codecs
+    .make(&single_track.codec_params, &decoder_options)
+    .expect("unable to create decoder");
+
+  console::log_1(&format!("initial codec params: {:?}", decoder.codec_params()).into());
+
+  let mut output_stream: Option<Box<dyn AudioOutput>> = None;
+
+  loop {
+    let packet = match format.next_packet() {
+      Ok(packet) => packet,
+      Err(e) => {
+        /* Wait until we see the EOF signal. */
+        if is_normal_eof(&e) {
+          break;
+        } else {
+          panic!("received unexpected error decoding next packet: {:?}", e);
+        }
+      }
+    };
+    let audio_buf_ref = decoder.decode(&packet).expect("failed to decode packet");
+    console::log_1(&format!("audio_buf_ref.frames(): {}", audio_buf_ref.frames()).into());
+    if output_stream.is_none() {
+      let duration: Duration = audio_buf_ref.capacity() as _;
+      let signal_spec = audio_buf_ref.spec().clone();
+      console::log_1(&format!("current signal spec: {:?}", &signal_spec).into());
+      let cpal_stream = match CpalAudioOutput::try_open(signal_spec, duration) {
+        Ok(stream) => stream,
+        Err(e) => {
+          panic!("error opening cpal output stream: {}", e);
+        }
+      };
+      output_stream.replace(cpal_stream);
+    }
+    if let Err(e) = output_stream
+      .as_mut()
+      .expect("output stream was initialized just above")
+      .write(audio_buf_ref)
+    {
+      panic!("error writing to output stream: {}", e);
+    }
   }
+
+  if let FinalizeResult {
+    verify_ok: Some(verify_ok),
+  } = decoder.finalize()
+  {
+    assert!(
+      verify_ok,
+      "verification was enabled and supported, but failed!"
+    );
+  }
+
+  if let Some(mut stream) = output_stream {
+    stream.flush();
+  }
+
+  /* console::log_1(&format!("track type: {:?}", track.track_type().unwrap()).into()); */
+  /* console::log_1(&format!("media type: {:?}", track.media_type().unwrap()).into()); */
+  /* console::log_1(&format!("sample count: {}", track.sample_count()).into()); */
 }
 
 /* NB: if Handle is used instead of &Handle then the object must *immediately* be freed by calling
