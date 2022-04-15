@@ -35,6 +35,14 @@ It is expected that after *track alignment* is performed, that the modified *can
 
 Ideally, the *output audio track* would not be found to constitute a copyright infringement by a jury in a court of law as well; however, the more important goal is to confound automated tools, since those can be applied at much greater scale and in far less accountable ways.
 
+### TODO
+
+**Currently, while we can successfully read in a `.m4a` audio file with `symphonia`, and even play it without loss of quality via `cpal`, bouncing the underlying PCM waveform to something like a `.wav` file with any of the rust wav implementations leads to extremely severe degradation of audio quality.** This is minimized when using `f32`s to store samples (vs e.g. `i16`s), but is still completely unusable.
+
+To recap, the intent is a web application which processes audio uploaded using webassembly, all directly on the client. While most of the work revolves around analysis which can be done by staying within the easier-to-manipulate PCM waveform formats, when we actually produce an output file, we'll want it to be as high quality as the original input audio, and ideally in the exact same format. This is to minimize the amount of specialized software or expertise needed to use this application.
+
+Since we are able to play the audio we extracted from `symphonia` with `cpal`, we can trust `symphonia` is not destroying the audio quality, but rather every single library we've found to convert to `.wav` files is trashing the quality somehow. This is a solvable problem; at worst, we can implement encoders for the formats `symphonia` so far only has *decoders* for. That may be the least effort and most reliable way out of this, as `symphonia` appears to be an extremely high quality library and would likely appreciate the effort.
+
 # Selection of Canonical Audio
 
 As described in [goals](#goals), we assume that the audio which is being played IRL is one for which there exists at most one or two *canonical recordings*. Most recorded music is expected to have this property, and this is part of why automated systems are able to recognize it in the first place.
