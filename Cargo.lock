@@ -236,9 +236,11 @@ dependencies = [
 name = "dmcaction"
 version = "0.1.0"
 dependencies = [
+ "cc",
  "console_error_panic_hook",
  "cpal",
  "symphonia",
+ "walkdir",
  "wasm-bindgen",
  "wav",
  "web-sys",

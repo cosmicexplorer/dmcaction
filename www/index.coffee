@@ -2,7 +2,9 @@
 
 import('../pkg')
   .catch console.error
-  .then ({beep, unbeep, rebeep, examine_file, play_recorded}) ->
+  .then ({beep, unbeep, rebeep, examine_file, play_recorded, log_result}) ->
+    log_result()
+
     handle = null
     playButton = document.getElementById 'play'
     stopButton = document.getElementById 'stop'

@@ -115,6 +115,15 @@ fn is_normal_eof(e: &SymphoniaError) -> bool {
   }
 }
 
+extern "C" {
+  fn f() -> i32;
+}
+
+#[wasm_bindgen]
+pub fn log_result() {
+  console::log_1(&format!("f() = {}", unsafe { f() }).into());
+}
+
 #[wasm_bindgen]
 pub fn examine_file(filename: &str, mime_type: &str, buf: Vec<u8>) -> Vec<u8> {
   console::log_1(&format!("filename: {}", filename).into());
