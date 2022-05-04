@@ -1,4 +1,4 @@
-fs = require 'fs/promises'
+fs = require 'fs'
 path = require 'path'
 {promisify} = require 'util'
 
@@ -23,14 +23,14 @@ task 'clean:target', 'clean out cargo build output', ->
   await rimraf 'target'
 
 compileCoffee = (coffeePath) ->
-  input = await fs.readFile coffeePath, encoding: 'utf8'
+  input = await promisify(fs.readFile) coffeePath, encoding: 'utf8'
   jsPath = coffeePath.replace /\.coffee$/, '.js'
   console.log "compiling #{coffeePath} to #{jsPath}..."
   output = CoffeeScript.compile input,
     inlineMap: yes
     bare: yes
     header: yes
-  await fs.writeFile jsPath, output
+  await promisify(fs.writeFile) jsPath, output
   jsPath
 
 task 'build:coffee', 'compile .coffee files', ->
