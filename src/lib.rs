@@ -59,8 +59,10 @@ use wasm_bindgen::prelude::*;
 use wav;
 use web_sys::console;
 
-use std::io::{Cursor, ErrorKind};
-use std::mem;
+use std::{
+  io::{Cursor, ErrorKind},
+  mem,
+};
 
 // When the `wee_alloc` feature is enabled, this uses `wee_alloc` as the global
 // allocator.
@@ -115,13 +117,23 @@ fn is_normal_eof(e: &SymphoniaError) -> bool {
   }
 }
 
-extern "C" {
-  fn f() -> i32;
-}
-
 #[wasm_bindgen]
 pub fn log_result() {
-  console::log_1(&format!("f() = {}", unsafe { f() }).into());
+  /* console::log_1(&format!("HUH WOW").into()); */
+  use ffmpeg::ffmpeg_sys::bindings;
+  console::log_1(
+    &format!(
+      "LIBAVUTIL_VERSION_MAJOR = {}",
+      bindings::LIBAVUTIL_VERSION_MAJOR
+    )
+    .into(),
+  );
+  console::log_1(
+    &format!("avutil_version = {:?}", unsafe {
+      bindings::avutil_version()
+    })
+    .into(),
+  );
 }
 
 #[wasm_bindgen]
