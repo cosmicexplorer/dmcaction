@@ -15,7 +15,7 @@ The use case is specifically:
 
 **The goal of this tool is to make it impossible for someone to play a copyrighted track while performing something they don't want on video.** This technique has been used to trigger overzealous automated enforcement of the Digital Millennium Copyright Act (DMCA)[^dmca] on video hosting platforms such as youtube, which causes the video to be immediately removed without any chance of appeal[^santa-ana-police-youtube]. This is one insidious way that certain people censor recordings of their foul acts and therefore escape justice. It is one small component of a technical infrastructure to protect protestors and anyone else facing violence with a mobile phone. *You are extremely important.*
 
-Of course, since protestors are not the only ones facing unfair censorship via the DMCA, this tool may also have wider applications.
+Of course, since protestors are not the only ones facing unfair censorship via the DMCA, this tool may also have wider applications, such as enabling copyright holders to exercise greater control over how their own copyright gets used [^undertale-youtube-dmca].
 
 This project refers to the DMCA[^dmca], which is a US law that defines copyright in a way that is extremely friendly to litigious copyright holders and incompatible with most ways people interact with popular culture. As described above, it is also extremely useful for automating censorship at the state level. **This tool should not have to exist.**
 
@@ -163,3 +163,4 @@ However, we can begin this process by creating a CLI application using command-l
 [^gradient-descent]: https://en.wikipedia.org/wiki/Gradient_descent
 [^wasm]: https://en.wikipedia.org/wiki/WebAssembly
 [^ffmpeg]: https://en.wikipedia.org/wiki/FFmpeg
+[^undertale-youtube-dmca]: https://twitter.com/UnderTale/status/1538229353913384961?s=20&t=SMPjzJhJMfbbf_dH8BgECQ
