@@ -9,7 +9,7 @@
   },
   "devDependencies": {
     "@wasm-tool/wasm-pack-plugin": "^0.4.2",
-    "coffeescript": "^2.6.1",
+    "coffeescript": "^2.7.0",
     "glob": "^8.0.1",
     "rimraf": "^2.6.3",
     "webpack": "^4.33.0",
