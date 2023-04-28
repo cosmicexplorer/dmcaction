@@ -1,5 +1,3 @@
-{promisify} = require 'util'
-
 import('../pkg')
   .catch console.error
   .then ({beep, unbeep, rebeep, examine_file, play_recorded, log_result}) ->

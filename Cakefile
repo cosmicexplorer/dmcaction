@@ -47,7 +47,8 @@ webpackConfig = ({release = no}) ->
     path: dist
     filename: '[name].js'
   devServer:
-    contentBase: dist
+    static:
+      directory: dist
     port: 8080
   plugins: [
     new HtmlWebpackPlugin
@@ -56,6 +57,8 @@ webpackConfig = ({release = no}) ->
       crateDirectory: __dirname
       extraArgs: '--out-name index'
   ]
+  experiments:
+    asyncWebAssembly: yes
 
 formatStats = (stats) ->
   stringified = stats.toString
@@ -74,7 +77,7 @@ webpackRunServer = promisify (cb) ->
   config = webpackConfig {release: no}
   compiler = webpack config
   devServerOptions = {config.devServer..., open: yes}
-  server = new WebpackDevServer compiler, devServerOptions
+  server = new WebpackDevServer devServerOptions, compiler
   server.listen devServerOptions.port, devServerOptions.host, cb
 
 task 'run:dev-server', 'run webpack dev server', ->
