@@ -119,8 +119,8 @@ fn is_normal_eof(e: &SymphoniaError) -> bool {
 
  #[wasm_bindgen]
 pub fn log_result() {
-  /* console::log_1(&format!("HUH WOW").into()); */
-  todo!("log result")
+  console::log_1(&format!("HUH WOW").into());
+  /* todo!("log result") */
   /* use ffmpeg::ffmpeg_sys::bindings; */
   /* console::log_1( */
   /*   &format!( */
