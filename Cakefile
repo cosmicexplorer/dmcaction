@@ -54,8 +54,8 @@ webpackConfig = ({release = no}) ->
     new HtmlWebpackPlugin
       template: './www/index.html'
     new WasmPackPlugin
+      forceMode: if release then "production" else "development"
       crateDirectory: __dirname
-      extraArgs: '--out-name index'
   ]
   experiments:
     asyncWebAssembly: yes
