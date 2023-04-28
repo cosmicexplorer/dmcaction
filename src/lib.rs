@@ -61,7 +61,7 @@ use web_sys::console;
 
 use std::{
   io::{Cursor, ErrorKind},
-  mem,
+  mem, os,
 };
 
 // When the `wee_alloc` feature is enabled, this uses `wee_alloc` as the global
@@ -117,9 +117,14 @@ fn is_normal_eof(e: &SymphoniaError) -> bool {
   }
 }
 
- #[wasm_bindgen]
+extern "C" {
+  fn f() -> os::raw::c_int;
+}
+
+#[wasm_bindgen]
 pub fn log_result() {
-  console::log_1(&format!("HUH WOW").into());
+  let x = unsafe { f() };
+  console::log_1(&format!("HUH WOW, x = {}", x).into());
   /* todo!("log result") */
   /* use ffmpeg::ffmpeg_sys::bindings; */
   /* console::log_1( */

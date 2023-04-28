@@ -20,6 +20,9 @@ lto                     = true
 [features]
 default                 = ["wee_alloc", "console_error_panic_hook"]
 
+[build-dependencies]
+cc = "1.0.79"
+
 [dependencies]
 # The `console_error_panic_hook` crate provides better debugging of panics by
 # logging them with `console.error`. This is great for development, but requires
