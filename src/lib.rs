@@ -1,4 +1,4 @@
-/* Copyright 2022 Danny McClanahan */
+/* Copyright 2022-2023 Danny McClanahan */
 /* SPDX-License-Identifier: AGPL-3.0-only */
 
 //! ???
@@ -117,23 +117,24 @@ fn is_normal_eof(e: &SymphoniaError) -> bool {
   }
 }
 
-#[wasm_bindgen]
+ #[wasm_bindgen]
 pub fn log_result() {
   /* console::log_1(&format!("HUH WOW").into()); */
-  use ffmpeg::ffmpeg_sys::bindings;
-  console::log_1(
-    &format!(
-      "LIBAVUTIL_VERSION_MAJOR = {}",
-      bindings::LIBAVUTIL_VERSION_MAJOR
-    )
-    .into(),
-  );
-  console::log_1(
-    &format!("avutil_version = {:?}", unsafe {
-      bindings::avutil_version()
-    })
-    .into(),
-  );
+  todo!("log result")
+  /* use ffmpeg::ffmpeg_sys::bindings; */
+  /* console::log_1( */
+  /*   &format!( */
+  /*     "LIBAVUTIL_VERSION_MAJOR = {}", */
+  /*     bindings::LIBAVUTIL_VERSION_MAJOR */
+  /*   ) */
+  /*   .into(), */
+  /* ); */
+  /* console::log_1( */
+  /*   &format!("avutil_version = {:?}", unsafe { */
+  /*     bindings::avutil_version() */
+  /*   }) */
+  /*   .into(), */
+  /* ); */
 }
 
 #[wasm_bindgen]
